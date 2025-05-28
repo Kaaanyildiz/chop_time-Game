@@ -1,0 +1,426 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
+import 'dart:async';
+import '../models/multiplayer_models.dart';
+import '../models/game_models.dart';
+import '../services/firebase_service.dart';
+import '../services/sound_manager.dart';
+
+enum MultiplayerGameState {
+  lobby,
+  countdown,
+  playing,
+  roundResults,
+  gameOver,
+  disconnected,
+}
+
+class MultiplayerController extends ChangeNotifier {
+  GameRoom? _currentRoom;
+  Player? _currentPlayer;
+  MultiplayerGameState _gameState = MultiplayerGameState.lobby;
+  late AnimationController _ingredientAnimationController;
+  StreamSubscription<GameRoom?>? _roomSubscription;
+  StreamSubscription<List<MultiplayerCutResult>>? _resultsSubscription;
+  
+  // Ingredient movement tracking
+  double _ingredientPosition = 0.0; // Position on screen (-1.0 to 1.0)
+  double _ingredientProgress = 0.0; // Animation progress (0.0 to 1.0)
+  GameDirection _currentDirection = GameDirection.left;
+  Timer? _roundTimer;
+  Timer? _countdownTimer;
+  bool _hasSubmittedResult = false;
+  
+  // Timing zones
+  final double _perfectZone = 0.08; // Perfect cut tolerance
+  final double _goodZone = 0.15; // Good cut tolerance
+  final double _okayZone = 0.25; // Okay cut tolerance
+  
+  // Current round results
+  List<MultiplayerCutResult> _currentRoundResults = [];
+  int _countdownValue = 0;
+  
+  // Getters
+  GameRoom? get currentRoom => _currentRoom;
+  Player? get currentPlayer => _currentPlayer;
+  MultiplayerGameState get gameState => _gameState;
+  double get ingredientPosition => _ingredientPosition;
+  double get ingredientProgress => _ingredientProgress;
+  GameDirection get currentDirection => _currentDirection;
+  List<MultiplayerCutResult> get currentRoundResults => _currentRoundResults;
+  int get countdownValue => _countdownValue;
+  bool get hasSubmittedResult => _hasSubmittedResult;
+  
+  // Computed properties
+  bool get isHost => _currentRoom?.hostId == _currentPlayer?.id;
+  bool get canStartGame => _currentRoom?.canStart ?? false;
+  bool get isInPerfectZone => _isInZone(_perfectZone);
+  bool get isInGoodZone => _isInZone(_goodZone);
+  bool get isInOkayZone => _isInZone(_okayZone);
+  
+  Player? getPlayerById(String playerId) {
+    return _currentRoom?.players.where((p) => p.id == playerId).firstOrNull;
+  }
+  
+  List<Player> get sortedPlayers {
+    if (_currentRoom == null) return [];
+    final players = List<Player>.from(_currentRoom!.players);
+    players.sort((a, b) => b.score.compareTo(a.score));
+    return players;
+  }
+  
+  void setAnimationController(AnimationController controller) {
+    _ingredientAnimationController = controller;
+    _ingredientAnimationController.addListener(_updateIngredientPosition);
+  }
+  
+  bool _isInZone(double tolerance) {
+    if (_currentRoom?.currentIngredient == null) return false;
+    
+    final target = _currentRoom!.currentIngredient!.targetPosition;
+    final distance = (_ingredientPosition - target).abs();
+    return distance <= tolerance;
+  }
+  
+  void _updateIngredientPosition() {
+    if (_currentRoom?.currentIngredient == null) return;
+    
+    _ingredientProgress = _ingredientAnimationController.value;
+    
+    switch (_currentDirection) {
+      case GameDirection.left:
+        _ingredientPosition = -1.0 + (2.0 * _ingredientProgress);
+        break;
+      case GameDirection.right:
+        _ingredientPosition = 1.0 - (2.0 * _ingredientProgress);
+        break;
+      case GameDirection.top:
+        _ingredientPosition = -1.0 + (2.0 * _ingredientProgress);
+        break;
+      case GameDirection.bottom:
+        _ingredientPosition = 1.0 - (2.0 * _ingredientProgress);
+        break;
+    }
+    
+    notifyListeners();
+  }
+  
+  Future<String> createRoom(String roomName, String playerName, int maxPlayers) async {
+    try {
+      final roomId = await FirebaseService.instance.createRoom(roomName, playerName, maxPlayers);
+      await joinRoom(roomId, playerName);
+      return roomId;
+    } catch (e) {
+      throw Exception('Failed to create room: $e');
+    }
+  }
+  
+  Future<void> joinRoom(String roomId, String playerName) async {
+    try {
+      // Join room on Firebase
+      if (_currentPlayer == null) {
+        await FirebaseService.instance.joinRoom(roomId, playerName);
+      }
+      
+      // Start listening to room updates
+      _roomSubscription?.cancel();
+      _roomSubscription = FirebaseService.instance.watchRoom(roomId).listen(
+        _onRoomUpdate,
+        onError: (error) {
+          debugPrint('Room subscription error: $error');
+          _gameState = MultiplayerGameState.disconnected;
+          notifyListeners();
+        },
+      );
+      
+      _gameState = MultiplayerGameState.lobby;
+      notifyListeners();
+      
+    } catch (e) {
+      throw Exception('Failed to join room: $e');
+    }
+  }
+  
+  void _onRoomUpdate(GameRoom? room) {
+    if (room == null) {
+      // Room was deleted
+      _gameState = MultiplayerGameState.disconnected;
+      _cleanup();
+      notifyListeners();
+      return;
+    }
+    
+    final oldRoom = _currentRoom;
+    _currentRoom = room;
+    
+    // Update current player
+    final userId = FirebaseService.instance.currentUserId;
+    _currentPlayer = room.players.where((p) => p.id == userId).firstOrNull;
+    
+    // Handle game state changes
+    _handleGameStateChange(oldRoom, room);
+    
+    notifyListeners();
+  }
+  
+  void _handleGameStateChange(GameRoom? oldRoom, GameRoom newRoom) {
+    // Game starting
+    if (oldRoom?.status != RoomStatus.starting && newRoom.status == RoomStatus.starting) {
+      _startGameCountdown();
+    }
+    
+    // New round started
+    if (newRoom.status == RoomStatus.playing && 
+        (oldRoom?.currentRound != newRoom.currentRound || oldRoom?.currentIngredient != newRoom.currentIngredient)) {
+      _startNewRound();
+    }
+    
+    // Game finished
+    if (oldRoom?.status != RoomStatus.finished && newRoom.status == RoomStatus.finished) {
+      _gameState = MultiplayerGameState.gameOver;
+      SoundManager().playSound(SoundType.gameOver);
+    }
+  }
+  
+  void _startGameCountdown() {
+    _gameState = MultiplayerGameState.countdown;
+    _countdownValue = 3;
+    
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      _countdownValue--;
+      
+      if (_countdownValue > 0) {
+        SoundManager().playSound(SoundType.countdown);
+      } else {
+        timer.cancel();
+        SoundManager().playSound(SoundType.gameStart);
+      }
+      
+      notifyListeners();
+    });
+  }
+  
+  void _startNewRound() {
+    if (_currentRoom?.currentIngredient == null) return;
+    
+    _gameState = MultiplayerGameState.playing;
+    _hasSubmittedResult = false;
+    _currentRoundResults.clear();
+    
+    final ingredient = _currentRoom!.currentIngredient!;
+    _currentDirection = ingredient.direction;
+    
+    // Start listening to round results
+    _resultsSubscription?.cancel();
+    _resultsSubscription = FirebaseService.instance
+        .watchRoundResults(_currentRoom!.id, _currentRoom!.currentRound)
+        .listen((results) {
+      _currentRoundResults = results;
+      notifyListeners();
+      
+      // Check if all players submitted results
+      final activePlayers = _currentRoom!.players.where((p) => p.status == PlayerStatus.playing).length;
+      if (results.length >= activePlayers) {
+        _showRoundResults();
+      }
+    });
+    
+    // Calculate animation duration based on speed and direction
+    final distance = _getDistanceForDirection(_currentDirection);
+    final duration = Duration(milliseconds: (distance / ingredient.speed * 1000).round());
+    
+    SoundManager().playSound(SoundType.ingredient);
+    
+    // Start ingredient animation
+    _ingredientAnimationController.reset();
+    _ingredientAnimationController.duration = duration;
+    _ingredientAnimationController.forward();
+    
+    // Auto-miss if no input
+    _roundTimer = Timer(duration, () {
+      if (!_hasSubmittedResult) {
+        _submitCutResult(double.infinity); // Auto-miss
+      }
+    });
+    
+    notifyListeners();
+  }
+  
+  double _getDistanceForDirection(GameDirection direction) {
+    // Distance ingredients need to travel based on direction
+    switch (direction) {
+      case GameDirection.left:
+      case GameDirection.right:
+        return 2.0; // Full horizontal distance
+      case GameDirection.top:
+      case GameDirection.bottom:
+        return 2.0; // Full vertical distance
+    }
+  }
+  
+  void onTap() {
+    if (_gameState != MultiplayerGameState.playing || 
+        _hasSubmittedResult || 
+        _currentRoom?.currentIngredient == null) {
+      return;
+    }
+    
+    final target = _currentRoom!.currentIngredient!.targetPosition;
+    final timing = _ingredientPosition - target;
+    _submitCutResult(timing);
+  }
+  
+  Future<void> _submitCutResult(double timing) async {
+    if (_hasSubmittedResult) return;
+    
+    _hasSubmittedResult = true;
+    _roundTimer?.cancel();
+    _ingredientAnimationController.stop();
+    
+    // Calculate quality and score
+    final result = _calculateCutResult(timing);
+    
+    // Submit to Firebase
+    try {
+      await FirebaseService.instance.submitCutResult(
+        _currentRoom!.id,
+        timing,
+        result.quality.name,
+        result.score,
+      );
+      
+      // Provide feedback
+      _provideFeedback(result.quality);
+      
+    } catch (e) {
+      debugPrint('Failed to submit cut result: $e');
+    }
+    
+    notifyListeners();
+  }
+  
+  CutResult _calculateCutResult(double timing) {
+    final absDistance = timing.abs();
+    
+    if (absDistance <= _perfectZone) {
+      return CutResult(
+        quality: CutQuality.perfect,
+        score: 100,
+        timing: timing,
+      );
+    } else if (absDistance <= _goodZone) {
+      return CutResult(
+        quality: CutQuality.good,
+        score: 75,
+        timing: timing,
+      );
+    } else if (absDistance <= _okayZone) {
+      return CutResult(
+        quality: CutQuality.okay,
+        score: 50,
+        timing: timing,
+      );
+    } else {
+      return CutResult(
+        quality: CutQuality.missed,
+        score: 0,
+        timing: timing,
+      );
+    }
+  }
+  
+  void _provideFeedback(CutQuality quality) {
+    // Sound effects
+    switch (quality) {
+      case CutQuality.perfect:
+        SoundManager().playSound(SoundType.perfectCut);
+        HapticFeedback.heavyImpact();
+        break;
+      case CutQuality.good:
+        SoundManager().playSound(SoundType.goodCut);
+        HapticFeedback.mediumImpact();
+        break;
+      case CutQuality.okay:
+        SoundManager().playSound(SoundType.goodCut);
+        HapticFeedback.lightImpact();
+        break;
+      case CutQuality.missed:
+        SoundManager().playSound(SoundType.missedCut);
+        HapticFeedback.selectionClick();
+        break;
+    }
+  }
+  
+  void _showRoundResults() {
+    _gameState = MultiplayerGameState.roundResults;
+    
+    // Show results for a few seconds, then continue
+    Timer(const Duration(seconds: 3), () {
+      if (_gameState == MultiplayerGameState.roundResults) {
+        // Wait for next round or game over
+        _gameState = MultiplayerGameState.playing;
+        notifyListeners();
+      }
+    });
+    
+    notifyListeners();
+  }
+  
+  Future<void> setPlayerReady() async {
+    if (_currentRoom == null || _currentPlayer == null) return;
+    
+    try {
+      await FirebaseService.instance.updatePlayerStatus(
+        _currentRoom!.id,
+        PlayerStatus.ready,
+      );
+    } catch (e) {
+      debugPrint('Failed to set ready: $e');
+    }
+  }
+  
+  Future<void> startGame() async {
+    if (!isHost || _currentRoom == null) return;
+    
+    try {
+      await FirebaseService.instance.startGame(_currentRoom!.id);
+    } catch (e) {
+      debugPrint('Failed to start game: $e');
+      throw Exception('Failed to start game: $e');
+    }
+  }
+  
+  Future<void> leaveRoom() async {
+    if (_currentRoom == null) return;
+    
+    try {
+      await FirebaseService.instance.leaveRoom(_currentRoom!.id);
+    } catch (e) {
+      debugPrint('Failed to leave room: $e');
+    }
+    
+    _cleanup();
+    _gameState = MultiplayerGameState.lobby;
+    notifyListeners();
+  }
+  
+  void _cleanup() {
+    _roomSubscription?.cancel();
+    _resultsSubscription?.cancel();
+    _roundTimer?.cancel();
+    _countdownTimer?.cancel();
+    _ingredientAnimationController.reset();
+    
+    _currentRoom = null;
+    _currentPlayer = null;
+    _currentRoundResults.clear();
+    _hasSubmittedResult = false;
+  }
+  
+  @override
+  void dispose() {
+    _cleanup();
+    super.dispose();
+  }
+}

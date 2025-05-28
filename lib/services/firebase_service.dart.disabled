@@ -1,0 +1,314 @@
+// Temporarily disabled - Firebase dependency removed
+// This file will be re-enabled when Firebase is added back to the project
+
+/*
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../models/multiplayer_models.dart';
+
+class FirebaseService {
+  static final FirebaseService _instance = FirebaseService._internal();
+  factory FirebaseService() => _instance;
+  FirebaseService._internal();
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  String? get currentUserId => _auth.currentUser?.uid;
+  User? get currentUser => _auth.currentUser;
+
+  // Authentication
+  Future<UserCredential?> signInAnonymously() async {
+    try {
+      return await _auth.signInAnonymously();
+    } catch (e) {
+      print('Error signing in anonymously: $e');
+      return null;
+    }
+  }
+
+  Future<void> signOut() async {
+    try {
+      await _auth.signOut();
+    } catch (e) {
+      print('Error signing out: $e');
+    }
+  }
+
+  // Game Rooms
+  Future<String?> createGameRoom(String roomName, Player host) async {
+    try {
+      final roomData = GameRoom(
+        id: '',
+        name: roomName,
+        hostId: host.id,
+        players: [host],
+        createdAt: DateTime.now(),
+      );
+
+      final docRef = await _firestore.collection('gameRooms').add(roomData.toMap());
+      
+      // Update the room with its ID
+      await docRef.update({'id': docRef.id});
+      
+      return docRef.id;
+    } catch (e) {
+      print('Error creating game room: $e');
+      return null;
+    }
+  }
+
+  Future<List<GameRoom>> getAvailableRooms() async {
+    try {
+      final snapshot = await _firestore
+          .collection('gameRooms')
+          .where('isGameStarted', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => GameRoom.fromMap(doc.data()))
+          .toList();
+    } catch (e) {
+      print('Error getting available rooms: $e');
+      return [];
+    }
+  }
+
+  Stream<List<GameRoom>> watchAvailableRooms() {
+    return _firestore
+        .collection('gameRooms')
+        .where('isGameStarted', isEqualTo: false)
+        .orderBy('createdAt', descending: true)
+        .limit(20)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => GameRoom.fromMap(doc.data()))
+            .toList());
+  }
+
+  Future<bool> joinGameRoom(String roomId, Player player) async {
+    try {
+      final roomRef = _firestore.collection('gameRooms').doc(roomId);
+      final roomDoc = await roomRef.get();
+      
+      if (!roomDoc.exists) return false;
+      
+      final room = GameRoom.fromMap(roomDoc.data()!);
+      
+      if (room.isFull || room.isGameStarted) return false;
+      
+      final updatedPlayers = [...room.players, player];
+      await roomRef.update({'players': updatedPlayers.map((p) => p.toMap()).toList()});
+      
+      return true;
+    } catch (e) {
+      print('Error joining game room: $e');
+      return false;
+    }
+  }
+
+  Future<bool> leaveGameRoom(String roomId, String playerId) async {
+    try {
+      final roomRef = _firestore.collection('gameRooms').doc(roomId);
+      final roomDoc = await roomRef.get();
+      
+      if (!roomDoc.exists) return false;
+      
+      final room = GameRoom.fromMap(roomDoc.data()!);
+      final updatedPlayers = room.players.where((p) => p.id != playerId).toList();
+      
+      if (updatedPlayers.isEmpty) {
+        // Delete room if no players left
+        await roomRef.delete();
+      } else {
+        // If the leaving player was the host, assign a new host
+        if (room.hostId == playerId && updatedPlayers.isNotEmpty) {
+          final newHost = updatedPlayers.first.copyWith(isHost: true);
+          updatedPlayers[0] = newHost;
+          await roomRef.update({
+            'players': updatedPlayers.map((p) => p.toMap()).toList(),
+            'hostId': newHost.id,
+          });
+        } else {
+          await roomRef.update({
+            'players': updatedPlayers.map((p) => p.toMap()).toList(),
+          });
+        }
+      }
+      
+      return true;
+    } catch (e) {
+      print('Error leaving game room: $e');
+      return false;
+    }
+  }
+
+  Stream<GameRoom?> watchGameRoom(String roomId) {
+    return _firestore
+        .collection('gameRooms')
+        .doc(roomId)
+        .snapshots()
+        .map((doc) {
+      if (!doc.exists) return null;
+      return GameRoom.fromMap(doc.data()!);
+    });
+  }
+
+  Future<bool> updatePlayerReady(String roomId, String playerId, bool isReady) async {
+    try {
+      final roomRef = _firestore.collection('gameRooms').doc(roomId);
+      final roomDoc = await roomRef.get();
+      
+      if (!roomDoc.exists) return false;
+      
+      final room = GameRoom.fromMap(roomDoc.data()!);
+      final updatedPlayers = room.players.map((p) {
+        if (p.id == playerId) {
+          return p.copyWith(isReady: isReady);
+        }
+        return p;
+      }).toList();
+      
+      await roomRef.update({
+        'players': updatedPlayers.map((p) => p.toMap()).toList(),
+      });
+      
+      return true;
+    } catch (e) {
+      print('Error updating player ready status: $e');
+      return false;
+    }
+  }
+
+  Future<bool> startGame(String roomId) async {
+    try {
+      await _firestore.collection('gameRooms').doc(roomId).update({
+        'isGameStarted': true,
+      });
+      return true;
+    } catch (e) {
+      print('Error starting game: $e');
+      return false;
+    }
+  }
+
+  // Game State Management
+  Future<bool> spawnIngredient(String roomId, IngredientSpawn ingredient) async {
+    try {
+      await _firestore
+          .collection('gameRooms')
+          .doc(roomId)
+          .collection('ingredients')
+          .doc(ingredient.id)
+          .set(ingredient.toMap());
+      return true;
+    } catch (e) {
+      print('Error spawning ingredient: $e');
+      return false;
+    }
+  }
+
+  Stream<List<IngredientSpawn>> watchIngredients(String roomId) {
+    return _firestore
+        .collection('gameRooms')
+        .doc(roomId)
+        .collection('ingredients')
+        .orderBy('spawnTime')
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => IngredientSpawn.fromMap(doc.data()))
+            .toList());
+  }
+
+  Future<bool> recordCutResult(String roomId, MultiplayerCutResult result) async {
+    try {
+      await _firestore
+          .collection('gameRooms')
+          .doc(roomId)
+          .collection('cutResults')
+          .add(result.toMap());
+
+      // Update player score
+      final roomRef = _firestore.collection('gameRooms').doc(roomId);
+      final roomDoc = await roomRef.get();
+      
+      if (roomDoc.exists) {
+        final room = GameRoom.fromMap(roomDoc.data()!);
+        final updatedPlayers = room.players.map((p) {
+          if (p.id == result.playerId) {
+            return p.copyWith(score: p.score + result.pointsEarned);
+          }
+          return p;
+        }).toList();
+        
+        await roomRef.update({
+          'players': updatedPlayers.map((p) => p.toMap()).toList(),
+        });
+      }
+
+      return true;
+    } catch (e) {
+      print('Error recording cut result: $e');
+      return false;
+    }
+  }
+
+  Stream<List<MultiplayerCutResult>> watchCutResults(String roomId) {
+    return _firestore
+        .collection('gameRooms')
+        .doc(roomId)
+        .collection('cutResults')
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => MultiplayerCutResult.fromMap(doc.data()))
+            .toList());
+  }
+
+  Future<bool> removeIngredient(String roomId, String ingredientId) async {
+    try {
+      await _firestore
+          .collection('gameRooms')
+          .doc(roomId)
+          .collection('ingredients')
+          .doc(ingredientId)
+          .delete();
+      return true;
+    } catch (e) {
+      print('Error removing ingredient: $e');
+      return false;
+    }
+  }
+
+  Future<bool> endGame(String roomId) async {
+    try {
+      final batch = _firestore.batch();
+      
+      // Delete all ingredients
+      final ingredientsSnapshot = await _firestore
+          .collection('gameRooms')
+          .doc(roomId)
+          .collection('ingredients')
+          .get();
+      
+      for (final doc in ingredientsSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      
+      // Update room status
+      batch.update(
+        _firestore.collection('gameRooms').doc(roomId),
+        {'isGameStarted': false},
+      );
+      
+      await batch.commit();
+      return true;
+    } catch (e) {
+      print('Error ending game: $e');
+      return false;
+    }
+  }
+}
+*/

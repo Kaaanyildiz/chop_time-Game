@@ -1,0 +1,997 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../controllers/multiplayer_controller.dart';
+import '../models/multiplayer_models.dart';
+import '../widgets/multiplayer_game_area.dart';
+
+class MultiplayerRoom extends StatefulWidget {
+  final String roomId;
+  
+  const MultiplayerRoom({super.key, required this.roomId});
+
+  @override
+  State<MultiplayerRoom> createState() => _MultiplayerRoomState();
+}
+
+class _MultiplayerRoomState extends State<MultiplayerRoom> 
+    with TickerProviderStateMixin {
+  late AnimationController _ingredientController;
+  late AnimationController _backgroundController;
+  late Animation<double> _backgroundAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    
+    _ingredientController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    );
+    
+    _backgroundController = AnimationController(
+      duration: const Duration(seconds: 4),
+      vsync: this,
+    );
+    
+    _backgroundAnimation = Tween<double>(begin: 0, end: 1)
+        .animate(CurvedAnimation(parent: _backgroundController, curve: Curves.easeInOut));
+    
+    _backgroundController.repeat(reverse: true);
+    
+    // Set animation controller for multiplayer controller
+    final controller = context.read<MultiplayerController>();
+    controller.setAnimationController(_ingredientController);
+  }
+  
+  @override
+  void dispose() {
+    _ingredientController.dispose();
+    _backgroundController.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<MultiplayerController>(
+      builder: (context, controller, child) {
+        // Handle disconnection
+        if (controller.gameState == MultiplayerGameState.disconnected) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.pushReplacementNamed(context, '/multiplayer_lobby');
+          });
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        
+        return Scaffold(
+          body: AnimatedBuilder(
+            animation: _backgroundAnimation,
+            builder: (context, child) {
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.center,
+                    radius: 1.2 + (_backgroundAnimation.value * 0.3),
+                    colors: _getBackgroundColors(controller.gameState),
+                    stops: const [0.0, 0.4, 0.7, 1.0],
+                  ),
+                ),
+                child: SafeArea(
+                  child: _buildContent(controller),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+  
+  List<Color> _getBackgroundColors(MultiplayerGameState gameState) {
+    switch (gameState) {
+      case MultiplayerGameState.lobby:
+        return const [
+          Color(0xFF1A237E),
+          Color(0xFF283593),
+          Color(0xFF3F51B5),
+          Color(0xFF0D1B2A),
+        ];
+      case MultiplayerGameState.countdown:
+        return const [
+          Color(0xFFFF6B6B),
+          Color(0xFFFF8E53),
+          Color(0xFFFF6B9D),
+          Color(0xFF2D1B69),
+        ];
+      case MultiplayerGameState.playing:
+        return const [
+          Color(0xFF4CAF50),
+          Color(0xFF8BC34A),
+          Color(0xFF00E676),
+          Color(0xFF1B5E20),
+        ];
+      case MultiplayerGameState.roundResults:
+        return const [
+          Color(0xFFFFD700),
+          Color(0xFFFFA000),
+          Color(0xFFFF8F00),
+          Color(0xFF3E2723),
+        ];
+      case MultiplayerGameState.gameOver:
+        return const [
+          Color(0xFF9C27B0),
+          Color(0xFF7B1FA2),
+          Color(0xFF4A148C),
+          Color(0xFF1A0E3D),
+        ];
+      default:
+        return const [
+          Color(0xFF1A237E),
+          Color(0xFF283593),
+          Color(0xFF3F51B5),
+          Color(0xFF0D1B2A),
+        ];
+    }
+  }
+  
+  Widget _buildContent(MultiplayerController controller) {
+    switch (controller.gameState) {
+      case MultiplayerGameState.lobby:
+        return _buildLobbyScreen(controller);
+      case MultiplayerGameState.countdown:
+        return _buildCountdownScreen(controller);
+      case MultiplayerGameState.playing:
+        return _buildGameScreen(controller);
+      case MultiplayerGameState.roundResults:
+        return _buildRoundResultsScreen(controller);
+      case MultiplayerGameState.gameOver:
+        return _buildGameOverScreen(controller);
+      default:
+        return const Center(child: CircularProgressIndicator());
+    }
+  }
+  
+  Widget _buildLobbyScreen(MultiplayerController controller) {
+    final room = controller.currentRoom;
+    if (room == null) return const Center(child: CircularProgressIndicator());
+    
+    return Column(
+      children: [
+        // Header with room info
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.black.withValues(alpha: 0.3),
+                Colors.transparent,
+              ],
+            ),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: () async {
+                      await controller.leaveRoom();
+                      Navigator.pop(context);
+                    },
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  ),
+                  const Spacer(),
+                  Column(
+                    children: [
+                      Text(
+                        room.name,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'ODA KODU: ${room.id}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: room.id));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Oda kodu kopyalandı!')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy, color: Colors.white),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        
+        // Players list
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.1),
+                  Colors.white.withValues(alpha: 0.05),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white30),
+            ),
+            child: Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text(
+                    'OYUNCULAR',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: room.maxPlayers,
+                    itemBuilder: (context, index) {
+                      if (index < room.players.length) {
+                        final player = room.players[index];
+                        return _buildPlayerCard(player, controller);
+                      } else {
+                        return _buildEmptyPlayerSlot();
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        // Action buttons
+        Container(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              if (!controller.isHost) ...[
+                Expanded(
+                  child: _buildLobbyButton(
+                    controller.currentPlayer?.status == PlayerStatus.ready ? 'HAZIR ✓' : 'HAZIR',
+                    controller.currentPlayer?.status == PlayerStatus.ready ? Colors.green : Colors.blue,
+                    controller.setPlayerReady,
+                  ),
+                ),
+              ] else ...[
+                Expanded(
+                  child: _buildLobbyButton(
+                    'OYUNU BAŞLAT',
+                    controller.canStartGame ? Colors.green : Colors.grey,
+                    controller.canStartGame ? controller.startGame : null,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildPlayerCard(Player player, MultiplayerController controller) {
+    final isCurrentPlayer = player.id == controller.currentPlayer?.id;
+    final isHost = player.id == controller.currentRoom?.hostId;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isCurrentPlayer
+              ? [Colors.orange.withValues(alpha: 0.3), Colors.orange.withValues(alpha: 0.1)]
+              : [Colors.white.withValues(alpha: 0.2), Colors.white.withValues(alpha: 0.1)],
+        ),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: isCurrentPlayer ? Colors.orange : Colors.white30,
+          width: isCurrentPlayer ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          // Avatar
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFFFD700), Color(0xFFFFA500)],
+              ),
+              borderRadius: BorderRadius.circular(25),
+            ),
+            child: Center(
+              child: Text(
+                player.avatar,
+                style: const TextStyle(fontSize: 24),
+              ),
+            ),
+          ),
+          
+          const SizedBox(width: 15),
+          
+          // Player info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      player.name,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    if (isHost) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'HOST',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (isCurrentPlayer) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'SEN',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _getStatusText(player.status),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _getStatusColor(player.status),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Status icon
+          Icon(
+            _getStatusIcon(player.status),
+            color: _getStatusColor(player.status),
+            size: 24,
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildEmptyPlayerSlot() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white30, style: BorderStyle.solid),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(25),
+            ),
+            child: const Icon(
+              Icons.person_add,
+              color: Colors.white30,
+              size: 24,
+            ),
+          ),
+          
+          const SizedBox(width: 15),
+          
+          const Text(
+            'Oyuncu bekleniyor...',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.white60,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildLobbyButton(String text, Color color, VoidCallback? onPressed) {
+    return Container(
+      height: 60,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [color, color.withValues(alpha: 0.7)],
+            ),
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: onPressed != null
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.4),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ]
+                : [],
+          ),
+          child: Center(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  
+  String _getStatusText(PlayerStatus status) {
+    switch (status) {
+      case PlayerStatus.waiting:
+        return 'Bekliyor...';
+      case PlayerStatus.ready:
+        return 'Hazır!';
+      case PlayerStatus.playing:
+        return 'Oynuyor';
+      case PlayerStatus.spectating:
+        return 'İzliyor';
+      case PlayerStatus.disconnected:
+        return 'Bağlantı Kesildi';
+    }
+  }
+  
+  Color _getStatusColor(PlayerStatus status) {
+    switch (status) {
+      case PlayerStatus.waiting:
+        return Colors.orange;
+      case PlayerStatus.ready:
+        return Colors.green;
+      case PlayerStatus.playing:
+        return Colors.blue;
+      case PlayerStatus.spectating:
+        return Colors.purple;
+      case PlayerStatus.disconnected:
+        return Colors.red;
+    }
+  }
+  
+  IconData _getStatusIcon(PlayerStatus status) {
+    switch (status) {
+      case PlayerStatus.waiting:
+        return Icons.schedule;
+      case PlayerStatus.ready:
+        return Icons.check_circle;
+      case PlayerStatus.playing:
+        return Icons.videogame_asset;
+      case PlayerStatus.spectating:
+        return Icons.visibility;
+      case PlayerStatus.disconnected:
+        return Icons.wifi_off;
+    }
+  }
+  
+  Widget _buildCountdownScreen(MultiplayerController controller) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'OYUN BAŞLIYOR!',
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+          
+          const SizedBox(height: 50),
+          
+          Container(
+            width: 200,
+            height: 200,
+            decoration: BoxDecoration(
+              gradient: const RadialGradient(
+                colors: [
+                  Color(0xFFFF6B6B),
+                  Color(0xFFFF8E53),
+                  Color(0xFFFF6B9D),
+                ],
+              ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.red.withValues(alpha: 0.5),
+                  blurRadius: 30,
+                  spreadRadius: 10,
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(
+                controller.countdownValue > 0 ? '${controller.countdownValue}' : 'BAŞLA!',
+                style: const TextStyle(
+                  fontSize: 80,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildGameScreen(MultiplayerController controller) {
+    return Column(
+      children: [
+        // Top bar with scores
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.black.withValues(alpha: 0.3),
+                Colors.transparent,
+              ],
+            ),
+          ),
+          child: _buildScoreBoard(controller),
+        ),
+        
+        // Game area
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: MultiplayerGameArea(
+                controller: controller,
+                ingredientController: _ingredientController,
+                onTap: controller.onTap,
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+  
+  Widget _buildScoreBoard(MultiplayerController controller) {
+    final players = controller.sortedPlayers;
+    
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: players.map((player) {
+          final isCurrentPlayer = player.id == controller.currentPlayer?.id;
+          return Container(
+            margin: const EdgeInsets.only(right: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isCurrentPlayer
+                    ? [Colors.orange, Colors.orange.withValues(alpha: 0.7)]
+                    : [Colors.blue, Colors.blue.withValues(alpha: 0.7)],
+              ),
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(player.avatar, style: const TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      player.name,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '${player.score}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                if (player.currentCombo > 0) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '×${player.currentCombo}',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+  
+  Widget _buildRoundResultsScreen(MultiplayerController controller) {
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(30),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Colors.white.withValues(alpha: 0.15),
+              Colors.white.withValues(alpha: 0.05),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(25),
+          border: Border.all(color: Colors.white30),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'TUR SONUÇLARI',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            
+            const SizedBox(height: 30),
+            
+            ...controller.currentRoundResults.map((result) {
+              final player = controller.getPlayerById(result.playerId);
+              if (player == null) return const SizedBox.shrink();
+              
+              return Container(
+                margin: const EdgeInsets.only(bottom: 15),
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0.2),
+                      Colors.white.withValues(alpha: 0.1),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Row(
+                  children: [
+                    Text(player.avatar, style: const TextStyle(fontSize: 24)),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: Text(
+                        player.name,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      result.quality.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _getQualityColor(result.quality),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '+${result.score}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildGameOverScreen(MultiplayerController controller) {
+    final sortedPlayers = controller.sortedPlayers;
+    final winner = sortedPlayers.isNotEmpty ? sortedPlayers.first : null;
+    
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'OYUN BİTTİ!',
+            style: TextStyle(
+              fontSize: 36,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+          
+          if (winner != null) ...[
+            const SizedBox(height: 30),
+            
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFFD700), Color(0xFFFFA500)],
+                ),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.orange.withValues(alpha: 0.5),
+                    blurRadius: 20,
+                    spreadRadius: 5,
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    '🏆 KAZANAN',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '${winner.avatar} ${winner.name}',
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Text(
+                    '${winner.score} puan',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          
+          const SizedBox(height: 40),
+          
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              children: sortedPlayers.asMap().entries.map((entry) {
+                final index = entry.key;
+                final player = entry.value;
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.white.withValues(alpha: 0.2),
+                        Colors.white.withValues(alpha: 0.1),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 30,
+                        child: Text(
+                          '${index + 1}.',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      Text(player.avatar, style: const TextStyle(fontSize: 20)),
+                      const SizedBox(width: 15),
+                      Expanded(
+                        child: Text(
+                          player.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${player.score} puan',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          
+          const SizedBox(height: 40),
+          
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: () async {
+                  await controller.leaveRoom();
+                  Navigator.pushReplacementNamed(context, '/multiplayer_lobby');
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                ),
+                child: const Text(
+                  'YENİ OYUN',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.grey,
+                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                ),
+                child: const Text(
+                  'ANA MENÜ',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Color _getQualityColor(String quality) {
+    switch (quality.toLowerCase()) {
+      case 'perfect':
+        return Colors.yellow;
+      case 'good':
+        return Colors.green;
+      case 'okay':
+        return Colors.orange;
+      case 'missed':
+        return Colors.red;
+      default:
+        return Colors.white;
+    }
+  }
+}

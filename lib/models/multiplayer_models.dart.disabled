@@ -1,0 +1,232 @@
+// Temporarily disabled - Firebase dependency removed
+// This file will be re-enabled when Firebase is added back to the project
+
+/*
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+enum GameDirection {
+  left,
+  right,
+  top,
+  bottom,
+}
+
+class Player {
+  final String id;
+  final String name;
+  final String avatar;
+  final int score;
+  final bool isReady;
+  final bool isHost;
+
+  Player({
+    required this.id,
+    required this.name,
+    required this.avatar,
+    this.score = 0,
+    this.isReady = false,
+    this.isHost = false,
+  });
+
+  factory Player.fromMap(Map<String, dynamic> map) {
+    return Player(
+      id: map['id'] ?? '',
+      name: map['name'] ?? '',
+      avatar: map['avatar'] ?? '',
+      score: map['score'] ?? 0,
+      isReady: map['isReady'] ?? false,
+      isHost: map['isHost'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'avatar': avatar,
+      'score': score,
+      'isReady': isReady,
+      'isHost': isHost,
+    };
+  }
+
+  Player copyWith({
+    String? id,
+    String? name,
+    String? avatar,
+    int? score,
+    bool? isReady,
+    bool? isHost,
+  }) {
+    return Player(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      avatar: avatar ?? this.avatar,
+      score: score ?? this.score,
+      isReady: isReady ?? this.isReady,
+      isHost: isHost ?? this.isHost,
+    );
+  }
+}
+
+class GameRoom {
+  final String id;
+  final String name;
+  final String hostId;
+  final List<Player> players;
+  final int maxPlayers;
+  final bool isGameStarted;
+  final DateTime createdAt;
+  final Map<String, dynamic> gameSettings;
+
+  GameRoom({
+    required this.id,
+    required this.name,
+    required this.hostId,
+    required this.players,
+    this.maxPlayers = 4,
+    this.isGameStarted = false,
+    required this.createdAt,
+    this.gameSettings = const {},
+  });
+
+  factory GameRoom.fromMap(Map<String, dynamic> map) {
+    return GameRoom(
+      id: map['id'] ?? '',
+      name: map['name'] ?? '',
+      hostId: map['hostId'] ?? '',
+      players: (map['players'] as List<dynamic>?)
+              ?.map((playerMap) => Player.fromMap(playerMap as Map<String, dynamic>))
+              .toList() ??
+          [],
+      maxPlayers: map['maxPlayers'] ?? 4,
+      isGameStarted: map['isGameStarted'] ?? false,
+      createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      gameSettings: map['gameSettings'] ?? {},
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'hostId': hostId,
+      'players': players.map((player) => player.toMap()).toList(),
+      'maxPlayers': maxPlayers,
+      'isGameStarted': isGameStarted,
+      'createdAt': Timestamp.fromDate(createdAt),
+      'gameSettings': gameSettings,
+    };
+  }
+
+  GameRoom copyWith({
+    String? id,
+    String? name,
+    String? hostId,
+    List<Player>? players,
+    int? maxPlayers,
+    bool? isGameStarted,
+    DateTime? createdAt,
+    Map<String, dynamic>? gameSettings,
+  }) {
+    return GameRoom(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      hostId: hostId ?? this.hostId,
+      players: players ?? this.players,
+      maxPlayers: maxPlayers ?? this.maxPlayers,
+      isGameStarted: isGameStarted ?? this.isGameStarted,
+      createdAt: createdAt ?? this.createdAt,
+      gameSettings: gameSettings ?? this.gameSettings,
+    );
+  }
+
+  bool get isFull => players.length >= maxPlayers;
+  bool get isEmpty => players.isEmpty;
+  bool get canStart => players.length >= 2 && players.every((p) => p.isReady);
+}
+
+class IngredientSpawn {
+  final String id;
+  final String type;
+  final GameDirection direction;
+  final double speed;
+  final DateTime spawnTime;
+  final Duration cutWindow;
+  final int points;
+
+  IngredientSpawn({
+    required this.id,
+    required this.type,
+    required this.direction,
+    required this.speed,
+    required this.spawnTime,
+    required this.cutWindow,
+    required this.points,
+  });
+
+  factory IngredientSpawn.fromMap(Map<String, dynamic> map) {
+    return IngredientSpawn(
+      id: map['id'] ?? '',
+      type: map['type'] ?? '',
+      direction: GameDirection.values[map['direction'] ?? 0],
+      speed: map['speed']?.toDouble() ?? 1.0,
+      spawnTime: (map['spawnTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      cutWindow: Duration(milliseconds: map['cutWindow'] ?? 1000),
+      points: map['points'] ?? 10,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'type': type,
+      'direction': direction.index,
+      'speed': speed,
+      'spawnTime': Timestamp.fromDate(spawnTime),
+      'cutWindow': cutWindow.inMilliseconds,
+      'points': points,
+    };
+  }
+}
+
+class MultiplayerCutResult {
+  final String playerId;
+  final String ingredientId;
+  final bool wasSuccessful;
+  final double accuracy;
+  final int pointsEarned;
+  final DateTime timestamp;
+
+  MultiplayerCutResult({
+    required this.playerId,
+    required this.ingredientId,
+    required this.wasSuccessful,
+    required this.accuracy,
+    required this.pointsEarned,
+    required this.timestamp,
+  });
+
+  factory MultiplayerCutResult.fromMap(Map<String, dynamic> map) {
+    return MultiplayerCutResult(
+      playerId: map['playerId'] ?? '',
+      ingredientId: map['ingredientId'] ?? '',
+      wasSuccessful: map['wasSuccessful'] ?? false,
+      accuracy: map['accuracy']?.toDouble() ?? 0.0,
+      pointsEarned: map['pointsEarned'] ?? 0,
+      timestamp: (map['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'playerId': playerId,
+      'ingredientId': ingredientId,
+      'wasSuccessful': wasSuccessful,
+      'accuracy': accuracy,
+      'pointsEarned': pointsEarned,
+      'timestamp': Timestamp.fromDate(timestamp),
+    };
+  }
+}
+*/

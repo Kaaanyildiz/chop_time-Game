@@ -1,0 +1,591 @@
+import 'package:flutter/material.dart';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+import '../controllers/multiplayer_controller.dart';
+import '../models/multiplayer_models.dart';
+import '../models/game_models.dart';
+
+class MultiplayerGameArea extends StatefulWidget {
+  final MultiplayerController controller;
+  final AnimationController ingredientController;
+  final VoidCallback onTap;
+
+  const MultiplayerGameArea({
+    super.key,
+    required this.controller,
+    required this.ingredientController,
+    required this.onTap,
+  });
+
+  @override
+  State<MultiplayerGameArea> createState() => _MultiplayerGameAreaState();
+}
+
+class _MultiplayerGameAreaState extends State<MultiplayerGameArea>
+    with TickerProviderStateMixin {
+  late AnimationController _zoneController;
+  late AnimationController _pulseController;
+  late Animation<double> _zoneAnimation;
+  late Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    
+    _zoneController = AnimationController(
+      duration: const Duration(milliseconds: 500),
+      vsync: this,
+    );
+    
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+
+    _zoneAnimation = Tween<double>(begin: 0, end: 1)
+        .animate(CurvedAnimation(parent: _zoneController, curve: Curves.easeInOut));
+    
+    _pulseAnimation = Tween<double>(begin: 1, end: 1.2)
+        .animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+
+    _pulseController.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _zoneController.dispose();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        child: AnimatedBuilder(
+          animation: Listenable.merge([
+            widget.ingredientController,
+            _zoneAnimation,
+            _pulseAnimation,
+          ]),
+          builder: (context, child) {
+            return CustomPaint(
+              painter: MultiplayerGameAreaPainter(
+                controller: widget.controller,
+                ingredientProgress: widget.ingredientController.value,
+                zoneAnimation: _zoneAnimation.value,
+                pulseAnimation: _pulseAnimation.value,
+              ),
+              size: Size.infinite,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class MultiplayerGameAreaPainter extends CustomPainter {
+  final MultiplayerController controller;
+  final double ingredientProgress;
+  final double zoneAnimation;
+  final double pulseAnimation;
+
+  MultiplayerGameAreaPainter({
+    required this.controller,
+    required this.ingredientProgress,
+    required this.zoneAnimation,
+    required this.pulseAnimation,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    
+    // Draw background
+    _drawBackground(canvas, size);
+    
+    // Draw cutting zones
+    _drawCuttingZones(canvas, size, center);
+    
+    // Draw current ingredient if active
+    if (controller.currentRoom?.currentIngredient != null && 
+        controller.gameState == MultiplayerGameState.playing) {
+      _drawIngredient(canvas, size, center);
+      _drawIngredientTrail(canvas, size, center);
+    }
+    
+    // Draw perfect zone indicator
+    _drawPerfectZoneIndicator(canvas, size, center);
+    
+    // Draw timing feedback
+    _drawTimingFeedback(canvas, size, center);
+    
+    // Draw round info
+    _drawRoundInfo(canvas, size);
+  }
+
+  void _drawBackground(Canvas canvas, Size size) {
+    // Wooden cutting board texture
+    final boardPaint = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.center,
+        radius: 0.8,
+        colors: [
+          const Color(0xFF8D6E63),
+          const Color(0xFF6D4C41),
+          const Color(0xFF5D4037),
+        ],
+        stops: const [0.0, 0.7, 1.0],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      boardPaint,
+    );
+
+    // Wood grain effect
+    final grainPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.1)
+      ..strokeWidth = 1;
+
+    for (int i = 0; i < 20; i++) {
+      final y = (size.height / 20) * i;
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(size.width, y),
+        grainPaint,
+      );
+    }
+  }
+
+  void _drawCuttingZones(Canvas canvas, Size size, Offset center) {
+    final currentIngredient = controller.currentRoom?.currentIngredient;
+    if (currentIngredient == null) return;
+
+    final direction = currentIngredient.direction;
+    
+    // Draw cutting line based on direction
+    final linePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.8)
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+
+    final glowPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.3)
+      ..strokeWidth = 12
+      ..style = PaintingStyle.stroke
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+
+    Path cutPath;
+    
+    switch (direction) {
+      case GameDirection.left:
+      case GameDirection.right:
+        // Horizontal cutting line
+        final targetY = center.dy + (currentIngredient.targetPosition * size.height * 0.3);
+        cutPath = Path()
+          ..moveTo(0, targetY)
+          ..lineTo(size.width, targetY);
+        break;
+        
+      case GameDirection.top:
+      case GameDirection.bottom:
+        // Vertical cutting line
+        final targetX = center.dx + (currentIngredient.targetPosition * size.width * 0.3);
+        cutPath = Path()
+          ..moveTo(targetX, 0)
+          ..lineTo(targetX, size.height);
+        break;
+    }
+
+    // Draw glow effect
+    canvas.drawPath(cutPath, glowPaint);
+    
+    // Draw main line
+    canvas.drawPath(cutPath, linePaint);
+    
+    // Draw dashed line for perfect zone
+    _drawDashedPath(canvas, cutPath, linePaint..color = Colors.yellow.withValues(alpha: 0.6));
+  }
+
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
+    const double dashWidth = 10.0;
+    const double dashSpace = 5.0;
+    double distance = 0.0;
+
+    for (ui.PathMetric pathMetric in path.computeMetrics()) {
+      while (distance < pathMetric.length) {
+        final segment = pathMetric.extractPath(distance, distance + dashWidth);
+        canvas.drawPath(segment, paint);
+        distance += dashWidth + dashSpace;
+      }
+    }
+  }
+
+  void _drawIngredient(Canvas canvas, Size size, Offset center) {
+    final currentIngredient = controller.currentRoom?.currentIngredient;
+    if (currentIngredient == null) return;
+
+    final direction = currentIngredient.direction;
+    final position = controller.ingredientPosition;
+    
+    Offset ingredientPos;
+    
+    switch (direction) {
+      case GameDirection.left:
+        ingredientPos = Offset(
+          size.width * 0.1 + (size.width * 0.8 * (position + 1) / 2),
+          center.dy + (currentIngredient.targetPosition * size.height * 0.3),
+        );
+        break;
+        
+      case GameDirection.right:
+        ingredientPos = Offset(
+          size.width * 0.9 - (size.width * 0.8 * (position + 1) / 2),
+          center.dy + (currentIngredient.targetPosition * size.height * 0.3),
+        );
+        break;
+        
+      case GameDirection.top:
+        ingredientPos = Offset(
+          center.dx + (currentIngredient.targetPosition * size.width * 0.3),
+          size.height * 0.1 + (size.height * 0.8 * (position + 1) / 2),
+        );
+        break;
+        
+      case GameDirection.bottom:
+        ingredientPos = Offset(
+          center.dx + (currentIngredient.targetPosition * size.width * 0.3),
+          size.height * 0.9 - (size.height * 0.8 * (position + 1) / 2),
+        );
+        break;
+    }
+
+    // Draw ingredient shadow
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+    canvas.drawCircle(
+      ingredientPos + const Offset(3, 3),
+      25,
+      shadowPaint,
+    );
+
+    // Draw ingredient with pulsing effect when in zone
+    double scale = 1.0;
+    if (controller.isInPerfectZone) {
+      scale = 1.0 + (pulseAnimation - 1.0) * 0.5; // Pulse effect
+    }
+
+    // Ingredient color based on type
+    final ingredientColor = _getIngredientColor(currentIngredient.ingredientType);
+    
+    final ingredientPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          ingredientColor,
+          ingredientColor.withValues(alpha: 0.8),
+          ingredientColor.withValues(alpha: 0.6),
+        ],
+      ).createShader(Rect.fromCircle(center: ingredientPos, radius: 25 * scale));
+
+    canvas.drawCircle(ingredientPos, 25 * scale, ingredientPaint);
+
+    // Draw ingredient emoji/icon
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: _getIngredientEmoji(currentIngredient.ingredientType),
+        style: TextStyle(
+          fontSize: 30 * scale,
+          fontFamily: 'NotoColorEmoji',
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      ingredientPos - Offset(textPainter.width / 2, textPainter.height / 2),
+    );
+
+    // Draw direction arrow
+    _drawDirectionArrow(canvas, ingredientPos, direction, scale);
+  }
+
+  void _drawIngredientTrail(Canvas canvas, Size size, Offset center) {
+    final currentIngredient = controller.currentRoom?.currentIngredient;
+    if (currentIngredient == null || ingredientProgress < 0.1) return;
+
+    final direction = currentIngredient.direction;
+    final trailLength = 5;
+    final trailOpacity = 0.6;
+
+    for (int i = 0; i < trailLength; i++) {
+      final trailProgress = (ingredientProgress - (i * 0.05)).clamp(0.0, 1.0);
+      if (trailProgress <= 0) continue;
+
+      Offset trailPos;
+      final trailPosition = -1.0 + (2.0 * trailProgress);
+      
+      switch (direction) {
+        case GameDirection.left:
+          trailPos = Offset(
+            size.width * 0.1 + (size.width * 0.8 * (trailPosition + 1) / 2),
+            center.dy + (currentIngredient.targetPosition * size.height * 0.3),
+          );
+          break;
+          
+        case GameDirection.right:
+          trailPos = Offset(
+            size.width * 0.9 - (size.width * 0.8 * (trailPosition + 1) / 2),
+            center.dy + (currentIngredient.targetPosition * size.height * 0.3),
+          );
+          break;
+          
+        case GameDirection.top:
+          trailPos = Offset(
+            center.dx + (currentIngredient.targetPosition * size.width * 0.3),
+            size.height * 0.1 + (size.height * 0.8 * (trailPosition + 1) / 2),
+          );
+          break;
+          
+        case GameDirection.bottom:
+          trailPos = Offset(
+            center.dx + (currentIngredient.targetPosition * size.width * 0.3),
+            size.height * 0.9 - (size.height * 0.8 * (trailPosition + 1) / 2),
+          );
+          break;
+      }
+
+      final trailPaint = Paint()
+        ..color = _getIngredientColor(currentIngredient.ingredientType)
+            .withValues(alpha: trailOpacity * (1.0 - i / trailLength))
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+
+      canvas.drawCircle(trailPos, 15 - (i * 2), trailPaint);
+    }
+  }
+
+  void _drawDirectionArrow(Canvas canvas, Offset center, GameDirection direction, double scale) {
+    final arrowPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.8)
+      ..style = PaintingStyle.fill;
+
+    final arrowSize = 8.0 * scale;
+    Path arrowPath = Path();
+
+    switch (direction) {
+      case GameDirection.left:
+        arrowPath.moveTo(center.dx - arrowSize, center.dy);
+        arrowPath.lineTo(center.dx + arrowSize, center.dy - arrowSize);
+        arrowPath.lineTo(center.dx + arrowSize, center.dy + arrowSize);
+        break;
+        
+      case GameDirection.right:
+        arrowPath.moveTo(center.dx + arrowSize, center.dy);
+        arrowPath.lineTo(center.dx - arrowSize, center.dy - arrowSize);
+        arrowPath.lineTo(center.dx - arrowSize, center.dy + arrowSize);
+        break;
+        
+      case GameDirection.top:
+        arrowPath.moveTo(center.dx, center.dy - arrowSize);
+        arrowPath.lineTo(center.dx - arrowSize, center.dy + arrowSize);
+        arrowPath.lineTo(center.dx + arrowSize, center.dy + arrowSize);
+        break;
+        
+      case GameDirection.bottom:
+        arrowPath.moveTo(center.dx, center.dy + arrowSize);
+        arrowPath.lineTo(center.dx - arrowSize, center.dy - arrowSize);
+        arrowPath.lineTo(center.dx + arrowSize, center.dy - arrowSize);
+        break;
+    }
+
+    arrowPath.close();
+    canvas.drawPath(arrowPath, arrowPaint);
+  }
+
+  void _drawPerfectZoneIndicator(Canvas canvas, Size size, Offset center) {
+    if (controller.gameState != MultiplayerGameState.playing) return;
+
+    // Draw zone indicators
+    if (controller.isInPerfectZone) {
+      _drawZoneIndicator(canvas, size, Colors.yellow, 'PERFECT!', 2.0);
+    } else if (controller.isInGoodZone) {
+      _drawZoneIndicator(canvas, size, Colors.green, 'GOOD', 1.5);
+    } else if (controller.isInOkayZone) {
+      _drawZoneIndicator(canvas, size, Colors.orange, 'OKAY', 1.0);
+    }
+  }
+
+  void _drawZoneIndicator(Canvas canvas, Size size, Color color, String text, double intensity) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.3 * intensity * pulseAnimation)
+      ..style = PaintingStyle.fill;
+
+    // Draw pulsing background
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      paint,
+    );
+
+    // Draw text
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: 48 * intensity,
+          fontWeight: FontWeight.w900,
+          color: color,
+          shadows: [
+            Shadow(
+              color: Colors.black.withValues(alpha: 0.8),
+              offset: const Offset(2, 2),
+              blurRadius: 4,
+            ),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset(
+        (size.width - textPainter.width) / 2,
+        (size.height - textPainter.height) / 2 - 50,
+      ),
+    );
+  }
+
+  void _drawTimingFeedback(Canvas canvas, Size size, Offset center) {
+    if (controller.hasSubmittedResult) {
+      // Show feedback for submitted result
+      final textPainter = TextPainter(
+        text: const TextSpan(
+          text: 'SONUÇ BEKLENİYOR...',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(
+          (size.width - textPainter.width) / 2,
+          size.height - 80,
+        ),
+      );
+    }
+  }
+
+  void _drawRoundInfo(Canvas canvas, Size size) {
+    final room = controller.currentRoom;
+    if (room == null) return;
+
+    // Draw round progress
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: 'ROUND ${room.currentRound}/${room.totalRounds}',
+        style: const TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    
+    textPainter.layout();
+    textPainter.paint(canvas, const Offset(20, 20));
+
+    // Draw direction indicator
+    final currentIngredient = room.currentIngredient;
+    if (currentIngredient != null) {
+      final directionText = TextPainter(
+        text: TextSpan(
+          text: '${currentIngredient.direction.emoji} ${_getDirectionText(currentIngredient.direction)}',
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      
+      directionText.layout();
+      directionText.paint(
+        canvas,
+        Offset(size.width - directionText.width - 20, 20),
+      );
+    }
+  }
+
+  String _getDirectionText(GameDirection direction) {
+    switch (direction) {
+      case GameDirection.left:
+        return 'SOLDAN';
+      case GameDirection.right:
+        return 'SAĞDAN';
+      case GameDirection.top:
+        return 'ÜSTTEN';
+      case GameDirection.bottom:
+        return 'ALTTAN';
+    }
+  }
+
+  Color _getIngredientColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'carrot':
+        return Colors.orange;
+      case 'tomato':
+        return Colors.red;
+      case 'onion':
+        return Colors.purple;
+      case 'potato':
+        return Colors.brown;
+      case 'pepper':
+        return Colors.green;
+      default:
+        return Colors.yellow;
+    }
+  }
+
+  String _getIngredientEmoji(String type) {
+    switch (type.toLowerCase()) {
+      case 'carrot':
+        return '🥕';
+      case 'tomato':
+        return '🍅';
+      case 'onion':
+        return '🧅';
+      case 'potato':
+        return '🥔';
+      case 'pepper':
+        return '🌶️';
+      default:
+        return '🥬';
+    }
+  }
+
+  @override
+  bool shouldRepaint(MultiplayerGameAreaPainter oldDelegate) {
+    return oldDelegate.ingredientProgress != ingredientProgress ||
+           oldDelegate.zoneAnimation != zoneAnimation ||
+           oldDelegate.pulseAnimation != pulseAnimation ||
+           oldDelegate.controller.gameState != controller.gameState ||
+           oldDelegate.controller.currentRoom?.currentIngredient != controller.currentRoom?.currentIngredient;
+  }
+}

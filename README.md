@@ -1,6 +1,6 @@
 # chop_time
 
-A new Flutter project.
+yeni flutter projesi. bir şef olarak sürekli gelen sebzeleri doğru zamanlamayla mükemmel bir şekilde kesin ve müşterilerinizi memnun edin.
 
 ## Getting Started
 
